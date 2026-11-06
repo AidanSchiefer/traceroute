@@ -23,25 +23,26 @@ uint16_t checksum(unsigned short *buffer, int size) {
 }
 
 // Build packet helper function
-void buildPacket(char buffer, struct in_addr binaryIP){
+void buildPacket(char* buffer, struct in_addr binaryIP){
   // Zero the buffer, then fill the payload
-  memset(buffer, 0, sizeof(char));
+  memset(buffer, 0, PACKET_SIZE);
+  memset(buffer, 'A', PAYLOAD_SIZE);
 
   // Cast pointers on to the buffer
-  struct iphdr *ip = (struct iphdr*) sendBuf;
-  struct icmphdr *icmp = (struct icmphdr*) (sendBuf + sizeof(struct iphdr));
+  struct iphdr *ip = (struct iphdr*) buffer;
+  struct icmphdr *icmp = (struct icmphdr*) (buffer + sizeof(struct iphdr));
 
   // Fill out the IP header
   ip->version = 4;
   ip->ihl = 5;
   ip->tos = 0;
-  ip->tot_len = PACKET_SIZE;
+  ip->tot_len = htons(PACKET_SIZE);
   ip->id = 0;
   ip->frag_off = 0;
   ip->protocol = IPPROTO_ICMP;
   ip->check = 0;
   ip->saddr = 0;
-  ip->daddr = binaryIP;
+  ip->daddr = binaryIP.s_addr;
 
   // Fill out the ICMP header
   icmp->type = ICMP_ECHO;
@@ -91,16 +92,17 @@ int main (int argc, char *argv[]) {
   
   // Convert the string to a binary address
   struct in_addr ip_binary;
-  if (inet_pton(AF_INET, destIP, &ip_binary) == 1){
+  if (inet_pton(AF_INET, destIP.c_str(), &ip_binary) == 1){
     TRACE << "The binary address was successfully created :" << ip_binary.s_addr << ENDL;
   }
   else {
     ERROR << "Something unexpected happened in convertng the IP to a binary address" << ENDL;
+    return -1;
   }
 
   // Create the sendBuf buffer
   char sendBuf[PACKET_SIZE];
-  buildPacket(sendBuf, destIP);
+  buildPacket(sendBuf, ip_binary);
 
   //----- Part 2: The two sockets (send and receive) -----
 
