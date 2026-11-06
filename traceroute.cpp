@@ -51,12 +51,20 @@ void buildPacket(char* buffer, struct in_addr binaryIP){
 }
 
 // Update packet method (called every loop iteration)
-void updatePacket(){
+void updatePacket(char* buffer, int ttl, int sequence){
+  // Cast pointers on to the buffer
+  struct iphdr *ip = (struct iphdr*) buffer;
+  struct icmphdr *icmp = (struct icmphdr*) (buffer + sizeof(struct iphdr));
+
   // Set ip->ttl
+  ip->ttl = ttl;
 
   // Set tcmp->un.echo.sequence with htons()
+  icmp->un.echo.sequence = htons(sequence);
 
   // Set icmp->checksum = 0, then compute it
+  icmp->checksum = 0;
+  icmp->checksum = checksum(buffer, sizeof(struct icmphdr) + PAYLOAD_SIZE);
 }
 
 int main (int argc, char *argv[]) {
