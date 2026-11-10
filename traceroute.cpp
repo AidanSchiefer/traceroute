@@ -113,7 +113,32 @@ int main (int argc, char *argv[]) {
   buildPacket(sendBuf, ip_binary);
 
   //----- Part 2: The two sockets (send and receive) -----
+  // Create the send socket
+  int sendFd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 
+  // Check to ensure the socket didn't error
+  if (sendFd == -1){
+    // No socket was opened, log error and return
+    ERROR << "Opening the send Fd failed" << ENDL;
+    return -1;
+  }
+
+  // Create the receive socket
+  int recvFd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+  // Check to ensure the socket didn't error
+  if (recvFd == -1){
+    // Receive socket wasn't opened, log error, close sendFd, then return
+    ERROR << "Opening the reveive Fd failed" << ENDL;
+    close(sendFd);
+    return -1;
+  }
+
+  // Build out the destination address
+  struct sockaddr_in destAddr;
+  memset(&destAddr, 0, sizeof(destAddr));
+  destAddr.sin_family = AF_INET;
+  destAddr.sin_addr = ip_binary;
 
   //----- Part 3: The main loop -----
 
