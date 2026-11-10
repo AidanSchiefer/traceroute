@@ -3,6 +3,11 @@
 // Constant values
 const int PACKET_SIZE = 64;
 const int PAYLOAD_SIZE = PACKET_SIZE - sizeof(struct iphdr) - sizeof(struct icmphdr);
+const int FIRST_TTL = 2;
+const int MAX_PACKETS = 30;
+const int REPLY_TIMEOUT_SEC = 15; // Total time to wait per packet
+const int SELECT_INTERVAL_SEC = 5; // How long each select() sleeps
+const int RECV_BUF_SIZE = 1500;
 
 // ****************************************************************************
 // * Compute the Internet Checksum over an arbitrary buffer.
@@ -20,6 +25,22 @@ uint16_t checksum(unsigned short *buffer, int size) {
     sum = (sum >> 16) + (sum & 0xFFFF);
     sum += (sum >> 16);
     return (unsigned short) (~sum);
+}
+
+// Enum to classify reply type
+enum ReplyType {REPLY_IGNORE, REPLY_TTL_EXCEEDED, REPLY_ECHO};
+
+// Classify reply helper function - to be fleshed out fully
+ReplyType classifyReply(const char* recvBuf, ssize_t bytesRead, int sequence){
+  // Case the ip and icmp pointers on to the buffer
+  struct iphdr* ip = (struct iphdr*) recvBuf;
+  struct icmphdr* icmp = (struct icmphdr*) (recvBuf + ip->ihl * 4);
+
+  // Debug log to log what has been received
+  DEBUG << "type=" << (int) icmp->type << " code=" << (int) icmp->code << ENDL;
+
+  // Return a basic ReplyType for now
+  return REPLY_IGNORE;
 }
 
 // Build packet helper function
