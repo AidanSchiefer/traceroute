@@ -1,6 +1,7 @@
 #include "traceroute.h"
 
 // Constant values
+// PACKET_SIZE = 64 = 20 (IP) + 8 (ICMP) + 36 (Payload)
 const int PACKET_SIZE = 64;
 const int PAYLOAD_SIZE = PACKET_SIZE - sizeof(struct iphdr) - sizeof(struct icmphdr);
 const int FIRST_TTL = 2;
@@ -30,16 +31,40 @@ uint16_t checksum(unsigned short *buffer, int size) {
     return (unsigned short) (~sum);
 }
 
-// Classify reply helper function - to be fleshed out fully
+// Classify reply helper function
 ReplyType classifyReply(const char* recvBuf, ssize_t bytesRead, int sequence){
-  // Case the ip and icmp pointers on to the buffer
+
+  // Check bytesRead size
+  if (bytesRead < sizeof(struct iphdr)){
+    return REPLY_IGNORE;
+  }
+
+  // Cast the ip pointer on to the buffer
   struct iphdr* ip = (struct iphdr*) recvBuf;
+
+  // Check the header length
+  int ipHeaderLen = ip->ihl * 4;
+  if (bytesRead < (ipHeaderLen + sizeof(struct icmphdr))){
+    return REPLY_IGNORE;
+  }
+  
+  // Cast the icmp pointer on to the buffer
   struct icmphdr* icmp = (struct icmphdr*) (recvBuf + ip->ihl * 4);
 
   // Debug log to log what has been received
   DEBUG << "type=" << (int) icmp->type << " code=" << (int) icmp->code << ENDL;
 
-  // Return a basic ReplyType for now
+  // Check the Echo Reply case
+  if ((icmp->type == ICMP_ECHOREPLY) && (icmp->un.echo.id == htons(getpid() & 0xFFFF)) && (icmp->un.echo.sequence == htons(sequence))){
+    return REPLY_ECHO;
+  }
+
+  // Check the TTL Exceeded case
+  if ((icmp->type == ICMP_TIME_EXCEEDED) && (icmp->code == ICMP_EXC_TTL)){
+    return REPLY_TTL_EXCEEDED;
+  }
+
+  // Echo Reply and TTL Exceeded cases not met, return Reply Ignore
   return REPLY_IGNORE;
 }
 
@@ -47,7 +72,7 @@ ReplyType classifyReply(const char* recvBuf, ssize_t bytesRead, int sequence){
 void buildPacket(char* buffer, struct in_addr binaryIP){
   // Zero the buffer, then fill the payload
   memset(buffer, 0, PACKET_SIZE);
-  memset(buffer, 'A', PAYLOAD_SIZE);
+  memset(buffer + sizeof(struct iphdr) + sizeof(struct icmphdr), 'A', PAYLOAD_SIZE);
 
   // Cast pointers on to the buffer
   struct iphdr *ip = (struct iphdr*) buffer;
@@ -80,12 +105,12 @@ void updatePacket(char* buffer, int ttl, int sequence){
   // Set ip->ttl
   ip->ttl = ttl;
 
-  // Set tcmp->un.echo.sequence with htons()
+  // Set icmp->un.echo.sequence with htons()
   icmp->un.echo.sequence = htons(sequence);
 
   // Set icmp->checksum = 0, then compute it
   icmp->checksum = 0;
-  icmp->checksum = checksum(buffer, sizeof(struct icmphdr) + PAYLOAD_SIZE);
+  icmp->checksum = checksum((unsigned short*) icmp, sizeof(struct icmphdr) + PAYLOAD_SIZE);
 }
 
 int main (int argc, char *argv[]) {
@@ -117,21 +142,27 @@ int main (int argc, char *argv[]) {
   // Validate that the destIP is not empty
   if (destIP.empty()){
     ERROR << "The destination IP is empty" << ENDL;
+    exit(-1);
   }
   
   // Convert the string to a binary address
-  struct in_addr ip_binary;
-  if (inet_pton(AF_INET, destIP.c_str(), &ip_binary) == 1){
-    TRACE << "The binary address was successfully created :" << ip_binary.s_addr << ENDL;
+  struct in_addr ipBinary;
+  int convertResult = inet_pton(AF_INET, destIP.c_str(), &ipBinary);
+  if (convertResult == 1){
+    TRACE << "The binary address was successfully created :" << ipBinary.s_addr << ENDL;
   }
-  else {
-    ERROR << "Something unexpected happened in convertng the IP to a binary address" << ENDL;
-    return -1;
+  else if (convertResult == 0) {
+    ERROR << "Invalid IP address" << ENDL;
+    exit(-1);
+  }
+  else{
+    ERROR << "An error occured with inet_pton" << ENDL;
+    exit(-1);
   }
 
   // Create the sendBuf buffer
   char sendBuf[PACKET_SIZE];
-  buildPacket(sendBuf, ip_binary);
+  buildPacket(sendBuf, ipBinary);
 
   //----- Part 2: The two sockets (send and receive) -----
   // Create the send socket
@@ -140,8 +171,8 @@ int main (int argc, char *argv[]) {
   // Check to ensure the socket didn't error
   if (sendFd == -1){
     // No socket was opened, log error and return
-    ERROR << "Opening the send Fd failed" << ENDL;
-    return -1;
+    ERROR << "Socket: opening the send Fd failed" << ENDL;
+    exit(-1);
   }
 
   // Create the receive socket
@@ -150,19 +181,19 @@ int main (int argc, char *argv[]) {
   // Check to ensure the socket didn't error
   if (recvFd == -1){
     // Receive socket wasn't opened, log error, close sendFd, then return
-    ERROR << "Opening the reveive Fd failed" << ENDL;
+    ERROR << "Socket: opening the receive Fd failed" << ENDL;
     close(sendFd);
-    return -1;
+    exit(-1);
   }
 
   // Build out the destination address
   struct sockaddr_in destAddr;
   memset(&destAddr, 0, sizeof(destAddr));
   destAddr.sin_family = AF_INET;
-  destAddr.sin_addr = ip_binary;
+  destAddr.sin_addr = ipBinary;
 
   //----- Part 3: The main loop -----
-  // Create the reveived buffer and tracking variables
+  // Create the received buffer and tracking variables
   char recvBuf[RECV_BUF_SIZE];
   bool reachedDestination = false;
   int sequence = 1;
@@ -174,7 +205,7 @@ int main (int argc, char *argv[]) {
 
     // Send the packet - test if it fails
     if (sendto(sendFd, sendBuf, PACKET_SIZE, 0, (struct sockaddr*) &destAddr, sizeof(destAddr)) == -1){
-      FATAL << "Packet send failed" << ENDL;
+      ERROR << "Packet send failed" << ENDL;
       break; 
     }
 
@@ -199,7 +230,7 @@ int main (int argc, char *argv[]) {
       // Int value to see if an error or timeout occurred
       int ready = select(recvFd + 1, &readFdSet, NULL, NULL, &timeout);
       if (ready < 0){
-        // Error occcured, log error, cleanup, then exit
+        // Error occured, log error, cleanup, then exit
         ERROR << "Select error occured" << ENDL;
         close(sendFd);
         close(recvFd);
@@ -214,7 +245,7 @@ int main (int argc, char *argv[]) {
       if (FD_ISSET(recvFd, &readFdSet)){
         // Create the received address
         struct sockaddr_in recvAddr;
-        // Get the length of the address - reset everu time
+        // Get the length of the address - reset every time
         socklen_t addrLen = sizeof(recvAddr);
         // Extract the bytes read
         ssize_t bytesRead = recvfrom(recvFd, recvBuf, RECV_BUF_SIZE, 0, (struct sockaddr*) &recvAddr, &addrLen);
@@ -242,7 +273,7 @@ int main (int argc, char *argv[]) {
 
         // If the reply is REPLY_ECHO -> print hop and final message, gotAnswer = true, reachedDestination = true
         if (reply == REPLY_ECHO){
-          std::cout << "TTL " << ttl << ": " << ipString << std::endl;
+          std::cout << "TTL " << ttl << ": " << ipString << "\nDestination Reached" << std::endl;
           gotAnswer = true;
           reachedDestination = true;
         }
@@ -261,5 +292,5 @@ int main (int argc, char *argv[]) {
   close(sendFd);
   close(recvFd);
 
-  //----- Part 4: Classifying what has been reveived -----
+  return 0;
 }
