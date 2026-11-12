@@ -9,6 +9,9 @@ const int REPLY_TIMEOUT_SEC = 15; // Total time to wait per packet
 const int SELECT_INTERVAL_SEC = 5; // How long each select() sleeps
 const int RECV_BUF_SIZE = 1500;
 
+// Enum to classify reply type
+enum ReplyType {REPLY_IGNORE, REPLY_TTL_EXCEEDED, REPLY_ECHO};
+
 // ****************************************************************************
 // * Compute the Internet Checksum over an arbitrary buffer.
 // * (written with the help of ChatGPT 3.5)
@@ -26,9 +29,6 @@ uint16_t checksum(unsigned short *buffer, int size) {
     sum += (sum >> 16);
     return (unsigned short) (~sum);
 }
-
-// Enum to classify reply type
-enum ReplyType {REPLY_IGNORE, REPLY_TTL_EXCEEDED, REPLY_ECHO};
 
 // Classify reply helper function - to be fleshed out fully
 ReplyType classifyReply(const char* recvBuf, ssize_t bytesRead, int sequence){
@@ -162,7 +162,101 @@ int main (int argc, char *argv[]) {
   destAddr.sin_addr = ip_binary;
 
   //----- Part 3: The main loop -----
+  // Create the reveived buffer and tracking variables
+  char recvBuf[RECV_BUF_SIZE];
+  bool reachedDestination = false;
+  int sequence = 1;
 
+  // Loop until max packets have been received and the destination has been reached
+  for (int ttl = FIRST_TTL; ttl < (FIRST_TTL + MAX_PACKETS) && !reachedDestination; ttl++, sequence++){
+    // Stamp this packet with the current TTL and sequence
+    updatePacket(sendBuf, ttl, sequence);
+
+    // Send the packet - test if it fails
+    if (sendto(sendFd, sendBuf, PACKET_SIZE, 0, (struct sockaddr*) &destAddr, sizeof(destAddr) == -1)){
+      FATAL << "Packet send failed" << ENDL;
+      break; 
+    }
+
+    // Log the sent packet with DEBUG
+    DEBUG << "Sent packet with TTL: " << ttl << ENDL;
+
+    // Wait up to 15 seconds for a reply to this packet
+    time_t startTime = time(NULL);
+    bool gotAnswer = false;
+
+
+    // Loop while the answer hasn't been received and the time is less than the timeout limit
+    while (!gotAnswer && (time(NULL) - startTime) < REPLY_TIMEOUT_SEC){
+      // Rebuild timeout and readFd attributes every iteration
+      fd_set readFdSet;
+      struct timeval timeout;
+      timeout.tv_sec = SELECT_INTERVAL_SEC;
+      timeout.tv_usec = 0;
+      FD_ZERO(&readFdSet);
+      FD_SET(recvFd, &readFdSet);
+
+      // Int value to see if an error or timeout occurred
+      int ready = select(recvFd + 1, &readFdSet, NULL, NULL, &timeout);
+      if (ready < 0){
+        // Error occcured, log error, cleanup, then exit
+        ERROR << "Select error occured" << ENDL;
+        break;
+      }
+      if (ready == 0){
+        DEBUG << "Timeout: no socket activity" << ENDL;
+        continue;
+      }
+
+      // If the fd is set, process the response
+      if (FD_ISSET(recvFd, &readFdSet)){
+        // Create the received address
+        struct sockaddr_in recvAddr;
+        // Get the length of the address - reset everu time
+        socklen_t addrLen = sizeof(recvAddr);
+        // Extract the bytes read
+        ssize_t bytesRead = recvfrom(recvFd, redvBuf, RECV_BUF_SIZE, 0, (struct sockaddr*) &recvAddr, &addrLen);
+
+        // Check if the bytes read is less then zero, log the error and close
+        if (bytesRead < 0){
+          ERROR << "No bytes read - exiting" << ENDL;
+          close(recvFd);
+          FD_CLR(recvFd, &readFdSet);
+          break;
+        }
+
+        // Get the reply type
+        ReplyType reply = classifyReply(recvBuf, bytesRead, sequence);
+
+        // Convert recvAddr.sin_addr to a string
+        char* ipResult = inet_ntop(AF_INET, recvAddr.sin_addr, recvBuf, addrLen);
+
+        // If the reply is REPLY_TTL_EXCEEDED -> print hop, gotAnswer = true
+        if (reply == REPLY_TTL_EXCEEDED){
+          std::cout << "Result came from " << ipResult << std::endl;
+          gotAnswer = true;
+        }
+
+        // If the reply is REPLY_ECHO -> print hop and final message, gotAnswer = true, reachedDestination = true
+        if (reply == REPLY_ECHO){
+          std::cout << "Result came from " << ipResult << " Final message " << recvBuf << std::endl;
+          gotAnswer = true;
+          reachedDestination = true;
+        }
+
+        // REPLY_IGNORE was the reply, do nothing and keep waiting
+      }
+    }
+
+    // If gotAnswer is false, log no response and its ttl
+    if (!gotAnswer){
+      std::cout << "No response with TTL of " << ttl << std::endl;
+    }
+  }
+
+  // Close the file descriptors
+  close(sendFd);
+  close(recvFd);
 
   //----- Part 4: Classifying what has been reveived -----
 }
