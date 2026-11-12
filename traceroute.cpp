@@ -167,13 +167,13 @@ int main (int argc, char *argv[]) {
   bool reachedDestination = false;
   int sequence = 1;
 
-  // Loop until max packets have been received and the destination has been reached
+  // Send up to 30 packets and stops early if EchoReply is received
   for (int ttl = FIRST_TTL; ttl < (FIRST_TTL + MAX_PACKETS) && !reachedDestination; ttl++, sequence++){
     // Stamp this packet with the current TTL and sequence
     updatePacket(sendBuf, ttl, sequence);
 
     // Send the packet - test if it fails
-    if (sendto(sendFd, sendBuf, PACKET_SIZE, 0, (struct sockaddr*) &destAddr, sizeof(destAddr) == -1)){
+    if (sendto(sendFd, sendBuf, PACKET_SIZE, 0, (struct sockaddr*) &destAddr, sizeof(destAddr)) == -1){
       FATAL << "Packet send failed" << ENDL;
       break; 
     }
@@ -201,7 +201,9 @@ int main (int argc, char *argv[]) {
       if (ready < 0){
         // Error occcured, log error, cleanup, then exit
         ERROR << "Select error occured" << ENDL;
-        break;
+        close(sendFd);
+        close(recvFd);
+        exit(-1);
       }
       if (ready == 0){
         DEBUG << "Timeout: no socket activity" << ENDL;
@@ -215,31 +217,32 @@ int main (int argc, char *argv[]) {
         // Get the length of the address - reset everu time
         socklen_t addrLen = sizeof(recvAddr);
         // Extract the bytes read
-        ssize_t bytesRead = recvfrom(recvFd, redvBuf, RECV_BUF_SIZE, 0, (struct sockaddr*) &recvAddr, &addrLen);
+        ssize_t bytesRead = recvfrom(recvFd, recvBuf, RECV_BUF_SIZE, 0, (struct sockaddr*) &recvAddr, &addrLen);
 
         // Check if the bytes read is less then zero, log the error and close
         if (bytesRead < 0){
           ERROR << "No bytes read - exiting" << ENDL;
           close(recvFd);
-          FD_CLR(recvFd, &readFdSet);
-          break;
+          close(sendFd);
+          exit(-1);
         }
 
         // Get the reply type
         ReplyType reply = classifyReply(recvBuf, bytesRead, sequence);
 
         // Convert recvAddr.sin_addr to a string
-        char* ipResult = inet_ntop(AF_INET, recvAddr.sin_addr, recvBuf, addrLen);
+        char ipString[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &recvAddr.sin_addr, ipString, INET_ADDRSTRLEN);
 
         // If the reply is REPLY_TTL_EXCEEDED -> print hop, gotAnswer = true
         if (reply == REPLY_TTL_EXCEEDED){
-          std::cout << "Result came from " << ipResult << std::endl;
+          std::cout << "TTL " << ttl << ": " << ipString << std::endl;
           gotAnswer = true;
         }
 
         // If the reply is REPLY_ECHO -> print hop and final message, gotAnswer = true, reachedDestination = true
         if (reply == REPLY_ECHO){
-          std::cout << "Result came from " << ipResult << " Final message " << recvBuf << std::endl;
+          std::cout << "TTL " << ttl << ": " << ipString << std::endl;
           gotAnswer = true;
           reachedDestination = true;
         }
